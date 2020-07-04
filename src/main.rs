@@ -20,10 +20,7 @@ fn signed_normalize_i16(x: i16) -> f32 {
     )
 }
 
-fn root_mean_square<'a, I>(values: I) -> f32
-where
-    I: IntoIterator<Item = &'a i16>,
-{
+fn root_mean_square<'a>(values: impl IntoIterator<Item = &'a i16>) -> f32 {
     // let rms = (it.map(|s| signed_normalize_i16(*s).powi(2)).sum::<f32>()
     //     / (num_samples as f32))
     //     .sqrt();
@@ -43,10 +40,7 @@ where
 /// All possible dBov measurements are negative numbers.
 /// To prevent an undefined log10(0), this implementation has a minimal value of 20*log10(1/i16::MAX).
 #[allow(non_snake_case)]
-fn dBov<'a, I>(values: I) -> f32
-where
-    I: IntoIterator<Item = &'a i16>,
-{
+fn dBov<'a>(values: impl IntoIterator<Item = &'a i16>) -> f32 {
     let rms = root_mean_square(values);
     let min = 1.0 / i16::MAX as f32;
     20.0 * rms.max(min).log10()
@@ -158,7 +152,7 @@ fn main() {
             for channel_index in 0..num_channels {
                 // each channel data is interleaved
                 let it = input_buffer
-                    .iter()
+                    .into_iter()
                     .skip(channel_index)
                     .step_by(num_channels);
 
