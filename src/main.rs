@@ -14,6 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
+use std::sync::{Arc, RwLock};
+use std::thread;
 
 /// map range [min,max] to [0,1]
 fn normalize(x: f32, min: f32, max: f32) -> f32 {
@@ -125,75 +127,116 @@ fn main() {
         return;
     }
 
-    let host = cpal::default_host();
-    // TODO: allow user select different device
-    let dev = host
-        .default_input_device()
-        .expect("failed to get default input device");
-    let event_loop = host.event_loop();
+    // audio input thread
+    let input_buffer_info_rwlock = Arc::new(RwLock::new(String::new()));
+    let input_buffer_info_wlock = input_buffer_info_rwlock.clone();
+    thread::spawn(move || {
+        let host = cpal::default_host();
+        // TODO: allow user select different device
+        let dev = host
+            .default_input_device()
+            .expect("failed to get default input device");
+        let event_loop = host.event_loop();
 
-    let stream_id = event_loop
-        .build_input_stream(&dev, &sample_format)
-        .expect("failed to build input stream, maybe invalid input device");
+        let stream_id = event_loop
+            .build_input_stream(&dev, &sample_format)
+            .expect("failed to build input stream, maybe invalid input device");
 
-    event_loop
-        .play_stream(stream_id)
-        .expect("failed to play stream");
+        event_loop
+            .play_stream(stream_id)
+            .expect("failed to play stream");
 
-    let is_tty = atty::is(atty::Stream::Stdout);
-    let mut first_line = true;
+        let is_tty = atty::is(atty::Stream::Stdout);
+        let mut first_line = true;
 
-    event_loop.run(move |_stream_id, stream_result| {
-        // assume i16 samples
-        if let cpal::StreamData::Input {
-            buffer: cpal::UnknownTypeInputBuffer::I16(input_buffer),
-        } = stream_result.expect("input stream error")
-        {
-            if !first_line && is_tty {
-                // up one line
-                print!("\x1b[1A");
-            }
+        event_loop.run(move |_stream_id, stream_result| {
+            // assume i16 samples
+            if let cpal::StreamData::Input {
+                buffer: cpal::UnknownTypeInputBuffer::I16(input_buffer),
+            } = stream_result.expect("input stream error")
+            {
+                if !first_line && is_tty {
+                    // up one line
+                    print!("\x1b[1A");
+                }
 
-            let num_channels = sample_format.channels as usize;
-            assert!(input_buffer.len() % num_channels == 0);
-            let num_samples = input_buffer.len() / num_channels;
-            print!(
-                "input buffer: {} i16 samples * {} channel(s), {:7.3} ms",
-                num_samples,
-                num_channels,
-                1000.0 * num_samples as f32 / sample_format.sample_rate.0 as f32,
-            );
-
-            for channel_index in 0..num_channels {
-                // each channel data is interleaved
-                let it = input_buffer
-                    .into_iter()
-                    .skip(channel_index)
-                    .step_by(num_channels);
-
-                #[allow(non_snake_case)]
-                let channel_dBov = dBov(it);
-                #[allow(non_snake_case)]
-                let minimal_dBov = dBov(&vec![0]);
-
-                print!(
-                    ", channel {}:▕{}▏{:+4.1} dBov",
-                    channel_index,
-                    vertical_scale_char(1.0 - channel_dBov / minimal_dBov),
-                    channel_dBov
+                let num_channels = sample_format.channels as usize;
+                assert!(input_buffer.len() % num_channels == 0);
+                let num_samples = input_buffer.len() / num_channels;
+                let mut input_buffer_info = format!(
+                    "input buffer: {} i16 samples * {} channel(s), {:7.3} ms",
+                    num_samples,
+                    num_channels,
+                    1000.0 * num_samples as f32 / sample_format.sample_rate.0 as f32,
                 );
-            }
 
-            if is_tty {
-                // clear the rest of the line
-                print!("\x1b[0K");
-            }
+                for channel_index in 0..num_channels {
+                    // each channel data is interleaved
+                    let it = input_buffer
+                        .into_iter()
+                        .skip(channel_index)
+                        .step_by(num_channels);
 
-            println!();
-            first_line = false;
-        } else {
-            unimplemented!("invalid audio stream input/output format");
-        }
+                    #[allow(non_snake_case)]
+                    let channel_dBov = dBov(it);
+                    #[allow(non_snake_case)]
+                    let minimal_dBov = dBov(&vec![0]);
+
+                    input_buffer_info += &format!(
+                        ", channel {}:▕{}▏{:+4.1} dBov",
+                        channel_index,
+                        vertical_scale_char(1.0 - channel_dBov / minimal_dBov),
+                        channel_dBov
+                    );
+                }
+
+                print!("{}", input_buffer_info);
+                {
+                    *input_buffer_info_wlock.write().unwrap() = input_buffer_info;
+                }
+
+                if is_tty {
+                    // clear the rest of the line
+                    print!("\x1b[0K");
+                }
+
+                println!();
+                first_line = false;
+            } else {
+                unimplemented!("invalid audio stream input/output format");
+            }
+        })
     });
-    // speaker-test  -c2 -l1
+
+    // main thread, http server
+    use tiny_http::{Response, Server};
+    let server = Server::http("0.0.0.0:8000").unwrap();
+
+    for request in server.incoming_requests() {
+        let response = if request.url() == "/info" {
+            Response::from_string(format!(
+                include_str!("pre-reload.html"),
+                *input_buffer_info_rwlock.read().unwrap()
+            ))
+            .with_header(
+                tiny_http::Header::from_bytes(
+                    &b"Content-Type"[..],
+                    &b"text/html; charset=UTF-8"[..],
+                )
+                .unwrap(),
+            )
+        } else {
+            Response::from_string(format!(
+                "received request!\nmethod: {:?}\nurl: {:?}\nheaders: {:?}",
+                request.method(),
+                request.url(),
+                request.headers()
+            ))
+        };
+
+        request.respond(response).unwrap();
+    }
+
+    // tested with 'speaker-test -c2 -l1' in a loopback
+    // (audio output connected to the audio input)
 }
