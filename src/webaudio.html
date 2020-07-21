@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+</head>
+
+<body>
+    <button id="play_pause_button">
+    </button>
+</body>
+<style>
+    body {
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    #play_pause_button {
+        width: 60px;
+        height: 60px;
+    }
+
+    #play_pause_button>svg {
+        width: 30px;
+        height: 30px;
+    }
+</style>
+<script>
+    const PlayIconSVG = '<svg viewbox="-1 -1 2 2"><path d="M-.5 .866,1 0,-.5 -.866z"/></svg>';
+    const PauseIconSVG = '<svg viewbox="-1 -1 2 2"><path d="M-.8 1H-.2V-1H-.8z M.8 1H.2V-1H.8z"/></svg>';
+    const SampleRate = 44100;
+    let AudioContext = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = new AudioContext();
+    let sampleCount = 0;
+
+    function log(pre) {
+        let t = audioCtx.currentTime;
+        let s = t * audioCtx.sampleRate;
+        console.log(pre + " Current time: " + t + " Sample count: " + s);
+    }
+
+    function init_audio() {
+        if (!!audioCtx) {
+            audioCtx.suspend();
+            audioCtx.close();
+        }
+        audioCtx = new AudioContext();
+        sampleCount = 0;
+        log("INIT");
+        console.log(audioCtx.sampleRate);
+        console.log(audioCtx.state)
+    }
+
+    function queue_audio_buffer(channel0 /* :Float32Array */, channel1 /* :Float32Array */) {
+        var bufferSource = audioCtx.createBufferSource();
+        var numSamples = Math.max(channel0.length, channel1.length);
+        bufferSource.buffer = audioCtx.createBuffer(2, numSamples, SampleRate);
+        bufferSource.buffer.getChannelData(0).set(channel0);
+        bufferSource.buffer.getChannelData(1).set(channel1);
+        bufferSource.connect(audioCtx.destination);
+        log("QUEUE");
+        console.log("sampleCount: " + sampleCount);
+        bufferSource.start(sampleCount / SampleRate);
+        sampleCount += bufferSource.buffer.length;
+    }
+
+    const play_pause_button = document.querySelector('button#play_pause_button');
+    play_pause_button.innerHTML = PlayIconSVG;
+    play_pause_button.onclick = function () {
+
+        if (!audioCtx || audioCtx.state !== "running") {
+            init_audio();
+            play_pause_button.innerHTML = PauseIconSVG;
+
+            log("3 sec, f=440 on chan 0");
+            var channel0 = new Float32Array(SampleRate);
+            var channel1 = new Float32Array(SampleRate);
+            for (var i = 0; i < SampleRate; i++) {
+                var t = i / SampleRate;
+                const f = 440;
+                channel0[i] = Math.sin(t * f * 2 * Math.PI);
+                channel1[i] = 0;
+            }
+            queue_audio_buffer(channel0, channel1);
+            queue_audio_buffer(channel0, channel1);
+            queue_audio_buffer(channel0, channel1);
+
+            log("3 sec, f=880 on chan 1");
+            var channel0 = new Float32Array(SampleRate);
+            var channel1 = new Float32Array(SampleRate);
+            for (var i = 0; i < SampleRate; i++) {
+                var t = i / SampleRate;
+                const f = 880;
+                channel0[i] = 0;
+                channel1[i] = Math.sin(t * f * 2 * Math.PI);
+            }
+            queue_audio_buffer(channel0, channel1);
+            queue_audio_buffer(channel0, channel1);
+            queue_audio_buffer(channel0, channel1);
+
+            log("3 sec, f=220 on chan 0");
+            var channel0 = new Float32Array(SampleRate);
+            var channel1 = new Float32Array(SampleRate);
+            for (var i = 0; i < SampleRate; i++) {
+                var t = i / SampleRate;
+                const f = 220;
+                channel0[i] = Math.sin(t * f * 2 * Math.PI);
+                channel1[i] = 0;
+            }
+            queue_audio_buffer(channel0, channel1);
+            queue_audio_buffer(channel0, channel1);
+            queue_audio_buffer(channel0, channel1);
+
+            log("end");
+
+        }
+        else {
+            if (!!audioCtx) {
+                audioCtx.suspend();
+                audioCtx.close();
+            }
+            play_pause_button.innerHTML = PlayIconSVG;
+
+        }
+    }
+
+</script>
+
+</html>
