@@ -17,36 +17,16 @@ use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
 use std::sync::{Arc, RwLock};
 use std::thread;
 
-/// map range [min,max] to [0,1]
-fn normalize(x: f32, min: f32, max: f32) -> f32 {
-    assert!(min != max);
-    (x - min) / (max - min)
+fn clamp(x: f32, min: f32, max: f32) -> f32 {
+    x.max(min).min(max)
 }
 
-/// map range [0,1] to [min,max]
-fn denormalize(x: f32, min: f32, max: f32) -> f32 {
-    (max - min) * x + min
-}
-
-/// map i16 range to [-1,+1]
-fn signed_normalize_i16(x: i16) -> f32 {
-    denormalize(
-        normalize(x as f32, i16::MIN as f32, i16::MAX as f32),
-        -1.0,
-        1.0,
-    )
-}
-
-fn root_mean_square<'a>(values: impl IntoIterator<Item = &'a i16>) -> f32 {
-    // let rms = (it.map(|s| signed_normalize_i16(*s).powi(2)).sum::<f32>()
-    //     / (num_samples as f32))
-    //     .sqrt();
-
+fn root_mean_square<'a>(values: impl IntoIterator<Item = &'a f32>) -> f32 {
     let mut n: usize = 0;
     let mut square_sum: f32 = 0.0;
     for x in values {
         n += 1;
-        square_sum += signed_normalize_i16(*x).powi(2);
+        square_sum += x.powi(2);
     }
 
     (square_sum / n as f32).sqrt()
@@ -55,11 +35,12 @@ fn root_mean_square<'a>(values: impl IntoIterator<Item = &'a i16>) -> f32 {
 /// Compute dBov unit of decibels relative to full scale.
 /// RMS value of a full-scale square wave is designated 0 dBov.
 /// All possible dBov measurements are negative numbers.
-/// To prevent an undefined log10(0), this implementation has a minimal value of 20*log10(1/i16::MAX).
+/// To prevent an undefined log10(0), this implementation has
+/// a minimal value of 20*log10(f32::EPSILON).
 #[allow(non_snake_case)]
-fn dBov<'a>(values: impl IntoIterator<Item = &'a i16>) -> f32 {
+fn dBov<'a>(values: impl IntoIterator<Item = &'a f32>) -> f32 {
     let rms = root_mean_square(values);
-    let min = 1.0 / i16::MAX as f32;
+    let min = f32::EPSILON;
     20.0 * rms.max(min).log10()
 }
 
@@ -73,9 +54,8 @@ fn vertical_scale_char(normalized_value: f32) -> char {
         .unwrap()
 }
 
-/// print all CPAL input devices in all CPAL hosts that support the sample format
-fn print_cpal_input_devices_with_sample_format(sample_format: &cpal::Format) {
-    // TODO: move out this block to its own function
+/// print all supported sample formats in all CPAL input devices in all CPAL hosts
+fn print_cpal_input_devices() {
     let default_host = cpal::default_host();
     if let Some(dev) = default_host.default_input_device() {
         println!(
@@ -94,18 +74,17 @@ fn print_cpal_input_devices_with_sample_format(sample_format: &cpal::Format) {
                 for dev in input_devices {
                     if let Ok(supported_input_formats) = dev.supported_input_formats() {
                         for f in supported_input_formats {
-                            if f.channels == sample_format.channels
-                                && f.max_sample_rate >= sample_format.sample_rate
-                                && f.data_type == sample_format.data_type
-                            {
-                                println!(
-                                    "host: '{}', input_device: '{}'",
+                            println!(
+                                    "host: '{}', input_device: '{}' channels: {}, sample rate min: {} max: {}, {:?}",
                                     host_id.name(),
                                     dev.name().unwrap_or_else(|_| String::from(
                                         "<failed to get device name>"
-                                    ))
+                                    )),
+                                    f.channels,
+                                    f.min_sample_rate.0,
+                                    f.max_sample_rate.0,
+                                    f.data_type
                                 );
-                            }
                         }
                     }
                 }
@@ -113,17 +92,61 @@ fn print_cpal_input_devices_with_sample_format(sample_format: &cpal::Format) {
         }
     }
 }
+
+fn process_input_buffer<T: cpal::Sample>(
+    input_buffer: cpal::InputBuffer<T>,
+    sample_format: &cpal::Format,
+) -> String
+{
+    let num_channels = sample_format.channels as usize;
+    assert!(input_buffer.len() % num_channels == 0);
+    let num_samples = input_buffer.len() / num_channels;
+
+    let mut input_buffer_info = format!(
+        "input buffer: {} {:#?} samples * {} channel(s), {:7.3} ms",
+        num_samples,
+        T::get_format(),
+        num_channels,
+        1000.0 * num_samples as f32 / sample_format.sample_rate.0 as f32,
+    );
+
+    for channel_index in 0..num_channels {
+        let input_buffer_f32: Vec<_> = input_buffer
+            .iter()
+            // each channel data is interleaved
+            .skip(channel_index)
+            .step_by(num_channels)
+            .map(|s| s.to_f32())
+            .collect();
+
+        #[allow(non_snake_case)]
+        let channel_dBov = dBov(&input_buffer_f32);
+        #[allow(non_snake_case)]
+        let minimal_dBov = dBov(&vec![0.0]);
+
+        input_buffer_info += &format!(
+            ", channel {}: {} {:+4.1} dBov",
+            channel_index,
+            vertical_scale_char(clamp(1.0 - channel_dBov / minimal_dBov, 0.0, 1.0)),
+            channel_dBov
+        );
+    }
+
+    input_buffer_info
+}
+
 fn main() {
     // assume CD Audio sample format
     let sample_format = cpal::Format {
         channels: 2,
         sample_rate: cpal::SampleRate(44100),
-        data_type: cpal::SampleFormat::I16,
+        // data_type: cpal::SampleFormat::I16,
+        data_type: cpal::SampleFormat::F32,
     };
 
-    // command line arg to list all input devices in all hosts that support the sample format
+    // command line arg to list all supported the sample format in all input devices in all hosts
     if let Some(_) = std::env::args().find(|arg| arg == "--list-input-devices") {
-        print_cpal_input_devices_with_sample_format(&sample_format);
+        print_cpal_input_devices();
         return;
     }
 
@@ -150,45 +173,23 @@ fn main() {
         let mut first_line = true;
 
         event_loop.run(move |_stream_id, stream_result| {
-            // assume i16 samples
-            if let cpal::StreamData::Input {
-                buffer: cpal::UnknownTypeInputBuffer::I16(input_buffer),
-            } = stream_result.expect("input stream error")
-            {
+            if let cpal::StreamData::Input { buffer } = stream_result.expect("input stream error") {
                 if !first_line && is_tty {
                     // up one line
                     print!("\x1b[1A");
                 }
 
-                let num_channels = sample_format.channels as usize;
-                assert!(input_buffer.len() % num_channels == 0);
-                let num_samples = input_buffer.len() / num_channels;
-                let mut input_buffer_info = format!(
-                    "input buffer: {} i16 samples * {} channel(s), {:7.3} ms",
-                    num_samples,
-                    num_channels,
-                    1000.0 * num_samples as f32 / sample_format.sample_rate.0 as f32,
-                );
-
-                for channel_index in 0..num_channels {
-                    // each channel data is interleaved
-                    let it = input_buffer
-                        .into_iter()
-                        .skip(channel_index)
-                        .step_by(num_channels);
-
-                    #[allow(non_snake_case)]
-                    let channel_dBov = dBov(it);
-                    #[allow(non_snake_case)]
-                    let minimal_dBov = dBov(&vec![0]);
-
-                    input_buffer_info += &format!(
-                        ", channel {}:▕{}▏{:+4.1} dBov",
-                        channel_index,
-                        vertical_scale_char(1.0 - channel_dBov / minimal_dBov),
-                        channel_dBov
-                    );
-                }
+                let input_buffer_info = match buffer {
+                    cpal::UnknownTypeInputBuffer::U16(input_buffer) => {
+                        process_input_buffer(input_buffer, &sample_format)
+                    }
+                    cpal::UnknownTypeInputBuffer::I16(input_buffer) => {
+                        process_input_buffer(input_buffer, &sample_format)
+                    }
+                    cpal::UnknownTypeInputBuffer::F32(input_buffer) => {
+                        process_input_buffer(input_buffer, &sample_format)
+                    }
+                };
 
                 print!("{}", input_buffer_info);
                 {
