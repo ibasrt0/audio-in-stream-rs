@@ -43,7 +43,7 @@ fn dBov<'a>(rms: f32) -> f32 {
 }
 
 fn vertical_scale_char(value: f32) -> char {
-    let normalized_value = clamp(value,0.0,1.0);
+    let normalized_value = clamp(value, 0.0, 1.0);
     let vblock_chars = " ▁▂▃▄▅▆▇█";
     let last = vblock_chars.chars().count() - 1;
     vblock_chars
@@ -90,26 +90,24 @@ fn print_cpal_input_devices() {
         }
     }
 }
+#[allow(non_snake_case)]
+struct ChannelData {
+    rms: f32,
+    dBov: f32,
+    samples: Vec<f32>,
+}
 
 fn process_input_buffer<T: cpal::Sample>(
     input_buffer: cpal::InputBuffer<T>,
     sample_format: &cpal::Format,
-) -> String
-{
+) -> Vec<ChannelData> {
     let num_channels = sample_format.channels as usize;
+    assert!(num_channels > 0);
     assert!(input_buffer.len() % num_channels == 0);
-    let num_samples = input_buffer.len() / num_channels;
-
-    let mut input_buffer_info = format!(
-        "input buffer: {} {:#?} samples * {} channel(s), {:7.3} ms",
-        num_samples,
-        T::get_format(),
-        num_channels,
-        1000.0 * num_samples as f32 / sample_format.sample_rate.0 as f32,
-    );
+    let mut channel_data = Vec::with_capacity(num_channels);
 
     for channel_index in 0..num_channels {
-        let input_buffer_f32: Vec<_> = input_buffer
+        let samples: Vec<_> = input_buffer
             .iter()
             // each channel data is interleaved
             .skip(channel_index)
@@ -117,25 +115,20 @@ fn process_input_buffer<T: cpal::Sample>(
             .map(|s| s.to_f32())
             .collect();
 
-        #[allow(non_snake_case)]
-        let channel_dBov = dBov(root_mean_square(&input_buffer_f32));
-        #[allow(non_snake_case)]
-        let minimal_dBov = dBov(0.0);
-
-        input_buffer_info += &format!(
-            ", channel {}: {} {:+4.1} dBov",
-            channel_index,
-            vertical_scale_char(1.0 - channel_dBov / minimal_dBov),
-            channel_dBov
-        );
+        let rms = root_mean_square(&samples);
+        channel_data.push(ChannelData {
+            rms: rms,
+            dBov: dBov(rms),
+            samples: samples,
+        });
     }
 
-    input_buffer_info
+    channel_data
 }
 
 fn main() {
     // assume CD Audio sample format
-    let sample_format = cpal::Format {
+    let sample_config = cpal::Format {
         channels: 2,
         sample_rate: cpal::SampleRate(44100),
         // data_type: cpal::SampleFormat::I16,
@@ -160,7 +153,7 @@ fn main() {
         let event_loop = host.event_loop();
 
         let stream_id = event_loop
-            .build_input_stream(&dev, &sample_format)
+            .build_input_stream(&dev, &sample_config)
             .expect("failed to build input stream, maybe invalid input device");
 
         event_loop
@@ -177,17 +170,42 @@ fn main() {
                     print!("\x1b[1A");
                 }
 
-                let input_buffer_info = match buffer {
-                    cpal::UnknownTypeInputBuffer::U16(input_buffer) => {
-                        process_input_buffer(input_buffer, &sample_format)
-                    }
-                    cpal::UnknownTypeInputBuffer::I16(input_buffer) => {
-                        process_input_buffer(input_buffer, &sample_format)
-                    }
-                    cpal::UnknownTypeInputBuffer::F32(input_buffer) => {
-                        process_input_buffer(input_buffer, &sample_format)
-                    }
+                let (num_samples, channel_data, sample_format) = match buffer {
+                    cpal::UnknownTypeInputBuffer::U16(input_buffer) => (
+                        input_buffer.len(),
+                        process_input_buffer(input_buffer, &sample_config),
+                        cpal::SampleFormat::U16,
+                    ),
+                    cpal::UnknownTypeInputBuffer::I16(input_buffer) => (
+                        input_buffer.len(),
+                        process_input_buffer(input_buffer, &sample_config),
+                        cpal::SampleFormat::I16,
+                    ),
+                    cpal::UnknownTypeInputBuffer::F32(input_buffer) => (
+                        input_buffer.len(),
+                        process_input_buffer(input_buffer, &sample_config),
+                        cpal::SampleFormat::F32,
+                    ),
                 };
+
+                let mut input_buffer_info = format!(
+                    "input buffer: {:>6} {:#?} samples * {} channel(s), {:>7.3} ms",
+                    num_samples / channel_data.len(),
+                    sample_format,
+                    channel_data.len(),
+                    1000.0 * num_samples as f32 / sample_config.sample_rate.0 as f32
+                );
+
+                for (channel_index, channel) in channel_data.iter().enumerate() {
+                    input_buffer_info += &format!(
+                        ", channel {}: {} {:>+5.1} dBov {} {:>5.3} RMS",
+                        channel_index,
+                        vertical_scale_char(1.0 - channel.dBov / dBov(0.0)),
+                        channel.dBov,
+                        vertical_scale_char(channel.rms),
+                        channel.rms
+                    );
+                }
 
                 print!("{}", input_buffer_info);
                 {
