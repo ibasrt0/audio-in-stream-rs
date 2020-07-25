@@ -38,10 +38,8 @@ fn root_mean_square<'a>(values: impl IntoIterator<Item = &'a f32>) -> f32 {
 /// To prevent an undefined log10(0), this implementation has
 /// a minimal value of 20*log10(f32::EPSILON).
 #[allow(non_snake_case)]
-fn dBov<'a>(values: impl IntoIterator<Item = &'a f32>) -> f32 {
-    let rms = root_mean_square(values);
-    let min = f32::EPSILON;
-    20.0 * rms.max(min).log10()
+fn dBov<'a>(rms: f32) -> f32 {
+    20.0 * rms.max(f32::EPSILON).log10()
 }
 
 fn vertical_scale_char(value: f32) -> char {
@@ -120,9 +118,9 @@ fn process_input_buffer<T: cpal::Sample>(
             .collect();
 
         #[allow(non_snake_case)]
-        let channel_dBov = dBov(&input_buffer_f32);
+        let channel_dBov = dBov(root_mean_square(&input_buffer_f32));
         #[allow(non_snake_case)]
-        let minimal_dBov = dBov(&vec![0.0]);
+        let minimal_dBov = dBov(0.0);
 
         input_buffer_info += &format!(
             ", channel {}: {} {:+4.1} dBov",
