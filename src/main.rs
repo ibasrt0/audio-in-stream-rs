@@ -44,8 +44,8 @@ fn dBov<'a>(values: impl IntoIterator<Item = &'a f32>) -> f32 {
     20.0 * rms.max(min).log10()
 }
 
-fn vertical_scale_char(normalized_value: f32) -> char {
-    assert!(normalized_value >= 0.0 && normalized_value <= 1.0);
+fn vertical_scale_char(value: f32) -> char {
+    let normalized_value = clamp(value,0.0,1.0);
     let vblock_chars = " ▁▂▃▄▅▆▇█";
     let last = vblock_chars.chars().count() - 1;
     vblock_chars
@@ -127,7 +127,7 @@ fn process_input_buffer<T: cpal::Sample>(
         input_buffer_info += &format!(
             ", channel {}: {} {:+4.1} dBov",
             channel_index,
-            vertical_scale_char(clamp(1.0 - channel_dBov / minimal_dBov, 0.0, 1.0)),
+            vertical_scale_char(1.0 - channel_dBov / minimal_dBov),
             channel_dBov
         );
     }
