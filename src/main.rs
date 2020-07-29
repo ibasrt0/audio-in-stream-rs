@@ -100,7 +100,7 @@ fn print_cpal_input_devices() {
 }
 
 struct ChannelData {
-    rms: f32,
+    loudness_level: f32,
     decibels_overload: f32,
     samples: Vec<f32>,
 }
@@ -125,7 +125,7 @@ fn process_input_buffer<T: cpal::Sample>(
 
         let rms = root_mean_square(&samples);
         channel_data.push(ChannelData {
-            rms: rms,
+            loudness_level: rms,
             decibels_overload: decibels_overload(rms),
             samples: samples,
         });
