@@ -32,14 +32,15 @@ fn root_mean_square<'a>(values: impl IntoIterator<Item = &'a f32>) -> f32 {
     (square_sum / n as f32).sqrt()
 }
 
-/// Compute dBov unit of decibels relative to full scale.
-/// RMS value of a full-scale square wave is designated 0 dBov.
-/// All possible dBov measurements are negative numbers.
-/// To prevent an undefined log10(0), this implementation has
-/// a minimal value of 20*log10(f32::EPSILON).
+/// Given a loudness level in nominal interval of [0,+1],
+/// compute dBov unit of decibels relative to overload.
+/// A loundness level of 1 is designated as 0 dBov and 
+/// a loundness level of 0 is designated as -inf.
+/// Loudness level is usually computed as the root mean square of
+/// a audio signal in the nominal interval of [-1,+1]
 #[allow(non_snake_case)]
-fn dBov<'a>(rms: f32) -> f32 {
-    20.0 * rms.max(f32::EPSILON).log10()
+fn dBov<'a>(loudness_level: f32) -> f32 {
+    20.0 * loudness_level.log10()
 }
 
 fn quantization_noise_ratio(quantization_bits: usize) -> f32 {
