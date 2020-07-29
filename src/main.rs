@@ -206,7 +206,7 @@ fn main() {
 
                 for (channel_index, channel) in channel_data.iter().enumerate() {
                     input_buffer_info += &format!(
-                        ", channel {}: [{}] {:>+5.1} dBov {:>5.3} RMS",
+                        ", channel {}: [{}] {:>+5.1} dBov",
                         channel_index,
                         // horizontal scale from 0 dBov
                         // to the quantization noise level for 16 bits, i.e. ~96 dB
@@ -221,7 +221,6 @@ fn main() {
                             16
                         ),
                         channel.decibels_overload,
-                        channel.rms
                     );
                 }
 
