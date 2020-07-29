@@ -34,12 +34,11 @@ fn root_mean_square<'a>(values: impl IntoIterator<Item = &'a f32>) -> f32 {
 
 /// Given a loudness level in nominal interval of [0,+1],
 /// compute dBov unit of decibels relative to overload.
-/// A loundness level of 1 is designated as 0 dBov and 
+/// A loundness level of 1 is designated as 0 dBov and
 /// a loundness level of 0 is designated as -inf.
 /// Loudness level is usually computed as the root mean square of
 /// a audio signal in the nominal interval of [-1,+1]
-#[allow(non_snake_case)]
-fn dBov<'a>(loudness_level: f32) -> f32 {
+fn decibels_overload<'a>(loudness_level: f32) -> f32 {
     20.0 * loudness_level.log10()
 }
 
@@ -99,10 +98,10 @@ fn print_cpal_input_devices() {
         }
     }
 }
-#[allow(non_snake_case)]
+
 struct ChannelData {
     rms: f32,
-    dBov: f32,
+    decibels_overload: f32,
     samples: Vec<f32>,
 }
 
@@ -127,7 +126,7 @@ fn process_input_buffer<T: cpal::Sample>(
         let rms = root_mean_square(&samples);
         channel_data.push(ChannelData {
             rms: rms,
-            dBov: dBov(rms),
+            decibels_overload: decibels_overload(rms),
             samples: samples,
         });
     }
@@ -209,16 +208,19 @@ fn main() {
                     input_buffer_info += &format!(
                         ", channel {}: [{}] {:>+5.1} dBov {:>5.3} RMS",
                         channel_index,
-                        // horizontal scale from 0 dBov 
+                        // horizontal scale from 0 dBov
                         // to the quantization noise level for 16 bits, i.e. ~96 dB
-                        // (a reasonable bottom level, regardless the bit deep of 
+                        // (a reasonable bottom level, regardless the bit deep of
                         // the samples)
-                        // Also, using 16 chars in the horizontal scale 
+                        // Also, using 16 chars in the horizontal scale
                         // make each char position an indication of a 1 bit
                         // or ~6 dB, equivalent of factor of change in value relative
                         // to the previous/next char position of 0.5
-                        horizontal_scale(1.0 + channel.dBov / quantization_noise_ratio(16), 16),
-                        channel.dBov,
+                        horizontal_scale(
+                            1.0 + channel.decibels_overload / quantization_noise_ratio(16),
+                            16
+                        ),
+                        channel.decibels_overload,
                         channel.rms
                     );
                 }
