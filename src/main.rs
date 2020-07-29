@@ -42,14 +42,22 @@ fn dBov<'a>(rms: f32) -> f32 {
     20.0 * rms.max(f32::EPSILON).log10()
 }
 
-fn vertical_scale_char(value: f32) -> char {
+fn quantization_noise_ratio(quantization_bits: usize) -> f32 {
+    20.0 * 2.0_f32.log10() * quantization_bits as f32
+}
+
+fn horizontal_scale(value: f32, num_chars: usize) -> String {
+    let mut hscale = String::with_capacity(num_chars);
     let normalized_value = clamp(value, 0.0, 1.0);
-    let vblock_chars = " ▁▂▃▄▅▆▇█";
-    let last = vblock_chars.chars().count() - 1;
-    vblock_chars
-        .chars()
-        .nth((last as f32 * normalized_value).round() as usize)
-        .unwrap()
+    let ivalue = (normalized_value * num_chars as f32) as usize;
+    for i in 0..num_chars {
+        if i < ivalue {
+            hscale.push('=');
+        } else {
+            hscale.push(' ');
+        }
+    }
+    hscale
 }
 
 /// print all supported sample formats in all CPAL input devices in all CPAL hosts
@@ -198,11 +206,18 @@ fn main() {
 
                 for (channel_index, channel) in channel_data.iter().enumerate() {
                     input_buffer_info += &format!(
-                        ", channel {}: {} {:>+5.1} dBov {} {:>5.3} RMS",
+                        ", channel {}: [{}] {:>+5.1} dBov {:>5.3} RMS",
                         channel_index,
-                        vertical_scale_char(1.0 - channel.dBov / dBov(0.0)),
+                        // horizontal scale from 0 dBov 
+                        // to the quantization noise level for 16 bits, i.e. ~96 dB
+                        // (a reasonable bottom level, regardless the bit deep of 
+                        // the samples)
+                        // Also, using 16 chars in the horizontal scale 
+                        // make each char position an indication of a 1 bit
+                        // or ~6 dB, equivalent of factor of change in value relative
+                        // to the previous/next char position of 0.5
+                        horizontal_scale(1.0 + channel.dBov / quantization_noise_ratio(16), 16),
                         channel.dBov,
-                        vertical_scale_char(channel.rms),
                         channel.rms
                     );
                 }
