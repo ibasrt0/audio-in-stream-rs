@@ -101,7 +101,6 @@ fn print_cpal_input_devices() {
 
 struct ChannelData {
     loudness_level: f32,
-    decibels_overload: f32,
     samples: Vec<f32>,
 }
 
@@ -123,10 +122,8 @@ fn process_input_buffer<T: cpal::Sample>(
             .map(|s| s.to_f32())
             .collect();
 
-        let rms = root_mean_square(&samples);
         channel_data.push(ChannelData {
-            loudness_level: rms,
-            decibels_overload: decibels_overload(rms),
+            loudness_level: root_mean_square(&samples),
             samples: samples,
         });
     }
@@ -205,6 +202,7 @@ fn main() {
                 );
 
                 for (channel_index, channel) in channel_data.iter().enumerate() {
+                    let channel_decibels_overload = decibels_overload(channel.loudness_level);
                     input_buffer_info += &format!(
                         ", channel {}: [{}] {:>+5.1} dBov",
                         channel_index,
@@ -217,10 +215,10 @@ fn main() {
                         // or ~6 dB, equivalent of factor of change in value relative
                         // to the previous/next char position of 0.5
                         horizontal_scale(
-                            1.0 + channel.decibels_overload / quantization_noise_ratio(16),
+                            1.0 + channel_decibels_overload / quantization_noise_ratio(16),
                             16
                         ),
-                        channel.decibels_overload,
+                        channel_decibels_overload,
                     );
                 }
 
