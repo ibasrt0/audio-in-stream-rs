@@ -38,7 +38,7 @@ fn root_mean_square<'a>(values: impl IntoIterator<Item = &'a f32>) -> f32 {
 /// a loundness level of 0 is designated as -inf.
 /// Loudness level is usually computed as the root mean square of
 /// a audio signal in the nominal interval of [-1,+1]
-fn decibels_overload<'a>(loudness_level: f32) -> f32 {
+fn decibels_overload(loudness_level: f32) -> f32 {
     20.0 * loudness_level.log10()
 }
 
