@@ -104,6 +104,12 @@ struct ChannelData {
     samples: Vec<f32>,
 }
 
+struct InputBufferSourceData {
+    num_samples: usize,
+    sample_format: cpal::SampleFormat,
+    channels: Vec<ChannelData>,
+}
+
 fn process_input_buffer<T: cpal::Sample>(
     input_buffer: cpal::InputBuffer<T>,
     sample_format: &cpal::Format,
@@ -131,6 +137,39 @@ fn process_input_buffer<T: cpal::Sample>(
     channel_data
 }
 
+fn input_buffer_info(source_data: &InputBufferSourceData, sample_rate: u32) -> String {
+    let mut input_buffer_info = format!(
+        "input buffer: {:>6} {:#?} samples * {} channel(s), {:>7.3} ms",
+        source_data.num_samples / source_data.channels.len(),
+        source_data.sample_format,
+        source_data.channels.len(),
+        1000.0 * source_data.num_samples as f32 / sample_rate as f32
+    );
+
+    for (channel_index, channel) in source_data.channels.iter().enumerate() {
+        let channel_decibels_overload = decibels_overload(channel.loudness_level);
+        input_buffer_info += &format!(
+            ", channel {}: [{}] {:>+5.1} dBov",
+            channel_index,
+            // horizontal scale from 0 dBov
+            // to the quantization noise level for 16 bits, i.e. ~96 dB
+            // (a reasonable bottom level, regardless the bit deep of
+            // the samples)
+            // Also, using 16 chars in the horizontal scale
+            // make each char position an indication of a 1 bit
+            // or ~6 dB, equivalent of factor of change in value relative
+            // to the previous/next char position of 0.5
+            horizontal_scale(
+                1.0 + channel_decibels_overload / quantization_noise_ratio(16),
+                16
+            ),
+            channel_decibels_overload,
+        );
+    }
+
+    input_buffer_info
+}
+
 fn main() {
     // assume CD Audio sample format
     let sample_config = cpal::Format {
@@ -139,6 +178,7 @@ fn main() {
         // data_type: cpal::SampleFormat::I16,
         data_type: cpal::SampleFormat::F32,
     };
+    let sample_rate = sample_config.sample_rate.0;
 
     // command line arg to list all supported the sample format in all input devices in all hosts
     if let Some(_) = std::env::args().find(|arg| arg == "--list-input-devices") {
@@ -147,8 +187,9 @@ fn main() {
     }
 
     // audio input thread
-    let input_buffer_info_rwlock = Arc::new(RwLock::new(String::new()));
-    let input_buffer_info_wlock = input_buffer_info_rwlock.clone();
+    let input_buffer_source_data_rwlock: Arc<RwLock<Option<InputBufferSourceData>>> =
+        Arc::new(RwLock::new(None));
+    let input_buffer_source_data_wlock = Arc::clone(&input_buffer_source_data_rwlock);
     thread::spawn(move || {
         let host = cpal::default_host();
         // TODO: allow user select different device
@@ -170,70 +211,46 @@ fn main() {
 
         event_loop.run(move |_stream_id, stream_result| {
             if let cpal::StreamData::Input { buffer } = stream_result.expect("input stream error") {
-                if !first_line && is_tty {
-                    // up one line
-                    print!("\x1b[1A");
-                }
-
-                let (num_samples, channel_data, sample_format) = match buffer {
-                    cpal::UnknownTypeInputBuffer::U16(input_buffer) => (
-                        input_buffer.len(),
-                        process_input_buffer(input_buffer, &sample_config),
-                        cpal::SampleFormat::U16,
-                    ),
-                    cpal::UnknownTypeInputBuffer::I16(input_buffer) => (
-                        input_buffer.len(),
-                        process_input_buffer(input_buffer, &sample_config),
-                        cpal::SampleFormat::I16,
-                    ),
-                    cpal::UnknownTypeInputBuffer::F32(input_buffer) => (
-                        input_buffer.len(),
-                        process_input_buffer(input_buffer, &sample_config),
-                        cpal::SampleFormat::F32,
-                    ),
+                *input_buffer_source_data_wlock.write().unwrap() = match buffer {
+                    cpal::UnknownTypeInputBuffer::U16(input_buffer) => {
+                        Some(InputBufferSourceData {
+                            num_samples: input_buffer.len(),
+                            sample_format: cpal::SampleFormat::U16,
+                            channels: process_input_buffer(input_buffer, &sample_config),
+                        })
+                    }
+                    cpal::UnknownTypeInputBuffer::I16(input_buffer) => {
+                        Some(InputBufferSourceData {
+                            num_samples: input_buffer.len(),
+                            sample_format: cpal::SampleFormat::I16,
+                            channels: process_input_buffer(input_buffer, &sample_config),
+                        })
+                    }
+                    cpal::UnknownTypeInputBuffer::F32(input_buffer) => {
+                        Some(InputBufferSourceData {
+                            num_samples: input_buffer.len(),
+                            sample_format: cpal::SampleFormat::F32,
+                            channels: process_input_buffer(input_buffer, &sample_config),
+                        })
+                    }
                 };
 
-                let mut input_buffer_info = format!(
-                    "input buffer: {:>6} {:#?} samples * {} channel(s), {:>7.3} ms",
-                    num_samples / channel_data.len(),
-                    sample_format,
-                    channel_data.len(),
-                    1000.0 * num_samples as f32 / sample_config.sample_rate.0 as f32
-                );
+                if let Some(ref source_data) = *input_buffer_source_data_wlock.read().unwrap() {
+                    if !first_line && is_tty {
+                        // up one line
+                        print!("\x1b[1A");
+                    }
 
-                for (channel_index, channel) in channel_data.iter().enumerate() {
-                    let channel_decibels_overload = decibels_overload(channel.loudness_level);
-                    input_buffer_info += &format!(
-                        ", channel {}: [{}] {:>+5.1} dBov",
-                        channel_index,
-                        // horizontal scale from 0 dBov
-                        // to the quantization noise level for 16 bits, i.e. ~96 dB
-                        // (a reasonable bottom level, regardless the bit deep of
-                        // the samples)
-                        // Also, using 16 chars in the horizontal scale
-                        // make each char position an indication of a 1 bit
-                        // or ~6 dB, equivalent of factor of change in value relative
-                        // to the previous/next char position of 0.5
-                        horizontal_scale(
-                            1.0 + channel_decibels_overload / quantization_noise_ratio(16),
-                            16
-                        ),
-                        channel_decibels_overload,
-                    );
+                    print!("{}", input_buffer_info(source_data, sample_rate));
+
+                    if is_tty {
+                        // clear the rest of the line
+                        print!("\x1b[0K");
+                    }
+
+                    println!();
+                    first_line = false;
                 }
-
-                print!("{}", input_buffer_info);
-                {
-                    *input_buffer_info_wlock.write().unwrap() = input_buffer_info;
-                }
-
-                if is_tty {
-                    // clear the rest of the line
-                    print!("\x1b[0K");
-                }
-
-                println!();
-                first_line = false;
             } else {
                 unimplemented!("invalid audio stream input/output format");
             }
@@ -245,28 +262,33 @@ fn main() {
     let server = Server::http("0.0.0.0:8000").unwrap();
 
     for request in server.incoming_requests() {
-        let response = if request.url() == "/info" {
-            Response::from_string(format!(
-                include_str!("pre-reload.html"),
-                *input_buffer_info_rwlock.read().unwrap()
-            ))
-            .with_header(
-                tiny_http::Header::from_bytes(
-                    &b"Content-Type"[..],
-                    &b"text/html; charset=UTF-8"[..],
-                )
-                .unwrap(),
-            )
+        if request.url() == "/info" {
+            if let Some(ref source_data) = *input_buffer_source_data_rwlock.read().unwrap() {
+                let response = Response::from_string(format!(
+                    include_str!("pre-reload.html"),
+                    input_buffer_info(source_data, sample_rate)
+                ))
+                .with_header(
+                    tiny_http::Header::from_bytes(
+                        &b"Content-Type"[..],
+                        &b"text/html; charset=UTF-8"[..],
+                    )
+                    .unwrap(),
+                );
+                request.respond(response).unwrap();
+            } else {
+                let response = Response::empty(tiny_http::StatusCode(204));
+                request.respond(response).unwrap();
+            };
         } else {
-            Response::from_string(format!(
+            let response = Response::from_string(format!(
                 "received request!\nmethod: {:?}\nurl: {:?}\nheaders: {:?}",
                 request.method(),
                 request.url(),
                 request.headers()
-            ))
+            ));
+            request.respond(response).unwrap();
         };
-
-        request.respond(response).unwrap();
     }
 
     // tested with 'speaker-test -c2 -l1' in a loopback
